@@ -1,61 +1,88 @@
 # plaza-payments
 
-PlazaPayments, sobre [`@ahincho/nova-nestjs`](https://github.com/ahincho/nova-nestjs-01-platform).
+Los pagos de [Plaza](https://github.com/ahincho/nova-plaza-01-shared-platform), en NestJS. Son simulados: no
+hablan con ninguna pasarela. Autorizan el pago de un pedido, lo devuelven y lo reembolsan, que es la compensación del
+BFF cuando la compra falla después de cobrar.
+
+Las decisiones están en [ADR-043](https://github.com/ahincho/nova-shared-01-docs/blob/main/adrs/shared/ADR-043-plaza-la-plataforma-de-compras.md)
+y [ADR-056](https://github.com/ahincho/nova-shared-01-docs/blob/main/adrs/shared/ADR-056-plaza-fase-1-catalogo-y-pagos-en-nestjs.md).
+Es el primer servicio NestJS de Nova dueño de datos, el caso que
+[ADR-020](https://github.com/ahincho/nova-shared-01-docs/blob/main/adrs/nest/ADR-020-orm-persistencia.md) esperaba.
+
+## API
+
+| Método | Ruta                       | Qué hace                                                       | Errores                                             |
+| ------ | -------------------------- | -------------------------------------------------------------- | --------------------------------------------------- |
+| `POST` | `/v1/payments`             | autoriza el pago de un pedido: `orderId`, `amount`, `currency` | 422 `PAYMENT_DECLINED`, 409 `PAYMENT_CONFLICT`, 400 |
+| `GET`  | `/v1/payments/{id}`        | un pago                                                        | 404 `PAYMENT_NOT_FOUND`                             |
+| `POST` | `/v1/payments/{id}/refund` | reembolsa el pago                                              | 404 `PAYMENT_NOT_FOUND`                             |
+
+Cada respuesta llega en el sobre de Nova, y cada error con su código y su capa, igual que en pedidos (Spring Boot) y
+en el catálogo (Quarkus). El cobro lleva el cliente en `X-Customer-Id`, que pone el BFF.
+
+- **Rechaza de forma predecible:** un monto sobre el tope, 1000 por defecto, es un 422. Así la demo muestra la
+  compensación a pedido.
+- **Un pedido tiene un solo pago.** El primer cobro responde 201; repetirlo con el mismo monto responde 200 con el
+  mismo pago, y con otro monto, 409. Lo garantiza la restricción única de la base: tres cobros simultáneos del mismo
+  pedido dejan un pago.
+- **Reembolsar es idempotente:** un pago reembolsado responde igual.
+- **Los montos viajan como número** y se guardan en centavos enteros, nunca como un número con decimales.
+
+## La arquitectura
+
+La forma hexagonal del estilo `acl` del generador de Nova, con un contexto acotado, `payments`:
+
+| Carpeta                            | Qué hay                                                    |
+| ---------------------------------- | ---------------------------------------------------------- |
+| `payments/domain`                  | `Payment` y `Money`, sin framework                         |
+| `payments/exception`               | los errores del dominio, `PaymentErrors`                   |
+| `payments/port/in`                 | los tres casos de uso: autorizar, devolver y reembolsar    |
+| `payments/port/out`                | `PaymentStorePort`, lo que el núcleo necesita de la base   |
+| `payments/service`                 | un servicio por caso de uso                                |
+| `payments/adapter/in/web`          | el controlador, con `request/` y `response/`               |
+| `payments/adapter/out/persistence` | la entidad de TypeORM y el puerto de salida sobre Postgres |
+
+`nova lint:arch` comprueba las reglas en cada `verify`: las mismas nueve, con los mismos nombres, que el catálogo en
+Quarkus.
+
+**La base, con TypeORM**, como dependencia del servicio y no de la plataforma (ADR-020). Las migraciones están en
+`src/migrations` y corren al arrancar, como Flyway en Java; `synchronize` está apagado. La sonda `/health/ready` hace un
+`select 1`, así que el balanceador no le manda tráfico si la base no responde.
+
+## Correrlo en local
+
+Levantar Postgres y Vault desde [`nova-plaza-01-shared-platform`](https://github.com/ahincho/nova-plaza-01-shared-platform)
+con `docker compose up -d --wait`, y después:
 
 ```bash
-pnpm install
-cp .env.example .env
-pnpm start:dev
+export NOVA_SECRETS_IMPORT=vault:plaza/payments/db VAULT_ADDR=http://localhost:8200 VAULT_TOKEN=plaza-local-root
+pnpm install && pnpm start:dev
 ```
 
-| Ruta            | Qué es                                                 |
-| --------------- | ------------------------------------------------------ |
-| `/health/live`  | el proceso está vivo; no toca dependencias             |
-| `/health/ready` | los chequeos registrados; 503 si uno cae o hay apagado |
-| `/api/v1/...`   | el resto, bajo el prefijo global                       |
-
-Las sondas quedan **fuera** del prefijo global a propósito: moverlas es mover el
-target group.
-
-## Tres dependencias, todas de la plataforma
-
-```json
-"dependencies":    { "@ahincho/nova-nestjs": "^0.16.1" },
-"devDependencies": {
-  "@ahincho/nova-nestjs-schematics": "^0.16.1",
-  "@ahincho/nova-nestjs-toolchain": "^0.16.1"
-}
-```
-
-NestJS no aparece, ni Vitest, TypeScript, oxlint o Prettier. Llegan dentro de
-esos tres, en las versiones contra las que la plataforma corre su suite. Por eso
-hace falta el `publicHoistPattern` del `pnpm-workspace.yaml`: pnpm aísla
-`node_modules` y sin él un `import` de `@nestjs/common` corta con `TS2307`.
-
-## Los scripts no nombran la herramienta
-
-Todos pasan por `nova`, que es del toolchain. El día que la plataforma cambie de
-runner, de linter o de formateador, este `package.json` no cambia.
+Escucha en el puerto 8083, con la documentación en `/docs`. `pnpm install` necesita un token con `read:packages` para
+el scope `@ahincho`, una vez por máquina:
 
 ```bash
-pnpm verify   # typecheck, lint, lint:arch, cobertura y formato
+pnpm config set "//npm.pkg.github.com/:_authToken" <token con read:packages>
 ```
 
-`nova lint` corre **siempre** con `--type-aware`. Sin esa bandera oxlint se
-salta las 23 reglas que necesitan tipos y no avisa: el reporte sale verde con la
-mitad del análisis sin hacer.
-
-## La arquitectura la verifica el CI
-
-`.dependency-cruiser.js` tiene las reglas, una por frontera, cada una con el
-motivo escrito. `nova lint:arch` las corre y forma parte de `nova verify`.
-
-**Las reglas son genéricas**: aplican a cualquier contexto
-que agregues sin tocar ese archivo.
-
-## Agregar código
+## Pruebas
 
 ```bash
-pnpm exec nest g feature <nombre> --style=acl
-pnpm exec nest g upstream <nombre>
+pnpm verify
 ```
+
+Corre los tipos, el lint, las reglas de arquitectura, las pruebas con su cobertura y el formato.
+
+| Prueba                        | Qué cubre                                                                              | Necesita                   |
+| ----------------------------- | -------------------------------------------------------------------------------------- | -------------------------- |
+| `money.spec.ts`               | los montos en centavos                                                                 | nada                       |
+| `payments.service.spec.ts`    | los casos de uso con el puerto en memoria, incluida la carrera de dos cobros           | nada                       |
+| `payments.controller.spec.ts` | la traducción del controlador y el 201 frente al 200                                   | nada                       |
+| `test/app.e2e-spec.ts`        | todo el servicio contra Postgres, con las migraciones, la restricción única y el sobre | Docker, por Testcontainers |
+
+El CI, además, construye la imagen y la levanta junto a un Postgres hasta que `/health/ready` responde.
+
+## Licencia
+
+[Eclipse Public License 2.0](LICENSE).

@@ -15,6 +15,12 @@ minimumReleaseAgeExclude:
 # la documentación se sirve igual.
 allowBuilds:
   '@scarf/scarf': false
+  # Llegan con Testcontainers, que solo usan las pruebas. Las tres compilan un
+  # complemento nativo opcional: sin él, ssh2 y protobufjs usan su versión en
+  # JavaScript y cpu-features no hace falta para hablar con Docker.
+  cpu-features: false
+  protobufjs: false
+  ssh2: false
 
 # Un rango de peer que no se cumple deja de ser una advertencia y pasa a romper
 # el install. Es lo que impide terminar en una combinación que la plataforma no

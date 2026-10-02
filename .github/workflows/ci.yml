@@ -86,28 +86,38 @@ jobs:
             --cache-to type=gha,mode=max \
             --load
 
-      # Que construya no prueba que arranque. Esto sí, y de paso ejercita que
-      # una sola imagen sirva para los tres ambientes: NODE_ENV es lo que
-      # inyecta la task definition, y sin inyectar nada la imagen cae en
-      # `production`, el más restrictivo.
+      # Que construya no prueba que arranque. Esto sí, contra un Postgres de
+      # verdad: pagos corre sus migraciones al arrancar, y `ready` contesta 200
+      # solo si la base responde. Las credenciales van por variable de entorno,
+      # como las dejaría el secreto de Vault, y NODE_ENV es lo que inyecta la
+      # task definition.
       - name: Run the image
         run: |
           set -euo pipefail
+          docker network create plaza
+          db=$(docker run --detach --network plaza --name payments-db \
+            --env POSTGRES_DB=payments --env POSTGRES_USER=payments --env POSTGRES_PASSWORD=payments-ci \
+            postgres:17-alpine)
+          until docker exec "$db" pg_isready -U payments -d payments > /dev/null 2>&1; do sleep 1; done
+
           # Sin --rm a propósito. Con esa bandera un contenedor que muere al
           # arrancar se borra solo, y el `docker logs` de más abajo -que es lo
           # único que explica por qué murió- contesta «No such container».
-          id=$(docker run --detach --env NODE_ENV=development --publish 3000:3000 "plaza-payments:ci")
-          trap 'docker rm --force "$id" > /dev/null 2>&1 || true' EXIT
+          id=$(docker run --detach --network plaza --env NODE_ENV=development --env PORT=3000 \
+            --env DB_URL=postgres://payments-db:5432/payments \
+            --env DB_USERNAME=payments --env DB_PASSWORD=payments-ci \
+            --publish 3000:3000 "plaza-payments:ci")
+          trap 'docker rm --force "$id" "$db" > /dev/null 2>&1 || true' EXIT
 
           for attempt in $(seq 1 30); do
-            if curl --silent --fail http://localhost:3000/health/live; then
+            if curl --silent --fail http://localhost:3000/health/ready; then
               echo
-              echo "el contenedor responde"
+              echo "el contenedor responde y su base también"
               exit 0
             fi
             sleep 2
           done
 
-          echo "el contenedor no respondió en 60 s"
+          echo "el contenedor no estuvo listo en 60 s"
           docker logs "$id"
           exit 1

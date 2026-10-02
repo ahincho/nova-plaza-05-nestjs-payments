@@ -2,8 +2,8 @@
   "name": "plaza-payments",
   "version": "0.1.0",
   "private": true,
-  "description": "PlazaPayments, sobre la plataforma Nova",
-  "license": "UNLICENSED",
+  "description": "Los pagos simulados de Plaza, sobre la plataforma Nova",
+  "license": "EPL-2.0",
   "type": "commonjs",
   "packageManager": "pnpm@11.24.0",
   "engines": {
@@ -25,10 +25,15 @@
     "verify": "nova verify"
   },
   "dependencies": {
-    "@ahincho/nova-nestjs": "^0.16.1"
+    "@ahincho/nova-nestjs": "^0.16.1",
+    "@ahincho/nova-nestjs-secrets-vault": "^0.16.1",
+    "@nestjs/typeorm": "^12.0.2",
+    "pg": "^8.23.1",
+    "typeorm": "^1.1.1"
   },
   "devDependencies": {
     "@ahincho/nova-nestjs-schematics": "^0.16.1",
-    "@ahincho/nova-nestjs-toolchain": "^0.16.1"
+    "@ahincho/nova-nestjs-toolchain": "^0.16.1",
+    "@testcontainers/postgresql": "^12.2.0"
   }
 }
