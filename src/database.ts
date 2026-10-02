@@ -16,9 +16,16 @@ let current: DataSource | undefined;
  * aplicación pero después de que se importó `app.module`.
  */
 export function databaseOptions(): DataSourceOptions {
+  // El secreto trae la URL sin credenciales, que van aparte. TypeORM, si recibe
+  // `url`, toma de ahí también el usuario y la contraseña, y sin ellos el
+  // driver corta con «client password must be a string». Por eso la URL se lee
+  // acá y llega desarmada.
+  const url = new URL(required('DB_URL'));
   return {
     type: 'postgres',
-    url: required('DB_URL'),
+    host: url.hostname,
+    port: url.port === '' ? 5432 : Number(url.port),
+    database: decodeURIComponent(url.pathname.replace(/^\//, '')),
     username: required('DB_USERNAME'),
     password: required('DB_PASSWORD'),
     entities: [PaymentEntity],
